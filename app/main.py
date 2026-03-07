@@ -26,7 +26,7 @@ from app.models import (
 logger = structlog.get_logger()
 
 # ── Config ──
-MAX_FILES = 50
+MAX_FILES = 1000
 MAX_FILE_SIZE_MB = 20
 ALLOWED_EXTENSIONS = {
     ".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp",
