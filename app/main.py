@@ -26,7 +26,6 @@ from app.models import (
 logger = structlog.get_logger()
 
 # ── Config ──
-MAX_FILES = 1000
 MAX_FILE_SIZE_MB = 20
 ALLOWED_EXTENSIONS = {
     ".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp",
@@ -109,12 +108,6 @@ async def upload(
     files: list[UploadFile] = File(...),
 ):
     """Upload files and start processing."""
-    if len(files) > MAX_FILES:
-        return JSONResponse(
-            status_code=400,
-            content={"error": f"Максимум {MAX_FILES} файлів"},
-        )
-
     if len(files) < 2:
         return JSONResponse(
             status_code=400,
