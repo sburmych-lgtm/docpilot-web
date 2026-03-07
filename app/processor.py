@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import re
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 import structlog
+import torch
+from PyPDF2 import PdfReader
 
 from app.dedup import find_duplicates
 from app.gemini import classify_text
@@ -28,16 +32,25 @@ logger = structlog.get_logger()
 
 # ── Singleton EasyOCR Reader ──
 _reader: Any = None
+_reader_lock = threading.Lock()
+
+GPU_AVAILABLE = torch.cuda.is_available()
+MAX_OCR_WORKERS = 4  # parallel file processing threads
 
 
 def get_reader() -> Any:
-    """Get or create the EasyOCR Reader singleton."""
+    """Get or create the EasyOCR Reader singleton (thread-safe)."""
     global _reader  # noqa: PLW0603
     if _reader is None:
-        import easyocr  # type: ignore[import-untyped]
+        with _reader_lock:
+            if _reader is None:  # double-check after acquiring lock
+                import easyocr  # type: ignore[import-untyped]
 
-        _reader = easyocr.Reader(["uk", "en"], gpu=False, verbose=False)
-        logger.info("easyocr_reader_initialized")
+                _reader = easyocr.Reader(
+                    ["uk", "en"], gpu=GPU_AVAILABLE, verbose=False,
+                )
+                gpu_label = "GPU" if GPU_AVAILABLE else "CPU"
+                logger.info("easyocr_reader_initialized", device=gpu_label)
     return _reader
 
 
@@ -68,12 +81,38 @@ GROUP_COLORS = [
     "#f97316", "#8b5cf6",
 ]
 
+MIN_TEXT_LENGTH = 20  # minimum chars to consider PDF text valid
+
 
 def format_file_size(size_bytes: int) -> str:
     """Format file size to human-readable string."""
     if size_bytes > 1_048_576:
         return f"{size_bytes / 1_048_576:.1f} MB"
     return f"{size_bytes // 1024} KB"
+
+
+# ── Text extraction ──
+
+
+def extract_text_from_pdf(file_path: Path) -> str | None:
+    """Try extracting text from PDF using PyPDF2 (no OCR needed).
+
+    Returns text if the PDF has a text layer, None otherwise.
+    """
+    try:
+        reader = PdfReader(str(file_path))
+        texts: list[str] = []
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            texts.append(page_text)
+        full_text = "\n".join(texts).strip()
+        if len(full_text) >= MIN_TEXT_LENGTH:
+            logger.debug("pdf_text_extracted", path=file_path.name, chars=len(full_text))
+            return full_text
+        return None
+    except Exception:
+        logger.debug("pdf_text_extraction_failed", path=file_path.name)
+        return None
 
 
 def ocr_image(file_path: Path) -> str:
@@ -90,6 +129,25 @@ def ocr_image(file_path: Path) -> str:
     except Exception:
         logger.warning("ocr_failed", path=str(file_path), exc_info=True)
         return ""
+
+
+def extract_text(file_path: Path) -> str:
+    """Extract text from any supported file.
+
+    For PDFs: try text layer first, fall back to OCR.
+    For images: use OCR directly.
+    """
+    if file_path.suffix.lower() == ".pdf":
+        text = extract_text_from_pdf(file_path)
+        if text is not None:
+            return text
+        # PDF is a scan — fall through to OCR
+        logger.debug("pdf_needs_ocr", path=file_path.name)
+
+    return ocr_image(file_path)
+
+
+# ── Classification ──
 
 
 def classify_by_regex(text: str) -> tuple[str, str, int] | None:
@@ -126,6 +184,9 @@ def classify_by_gemini(text: str) -> tuple[str, str, int] | None:
     return None
 
 
+# ── Pipeline ──
+
+
 def run_pipeline(
     task_id: str,
     tasks: dict[str, TaskStatus],
@@ -139,30 +200,47 @@ def run_pipeline(
     """
     start_time = time.time()
     status = tasks[task_id]
+    progress_lock = threading.Lock()
 
     try:
         total = len(file_paths)
 
-        # ── Step 1: OCR ──
+        # ── Step 1: Extract text (PDF text layer + OCR) ──
         status.step = StepEnum.OCR
         status.message = "Читаємо текст документів..."
 
         ocr_results: dict[Path, str] = {}
-        for i, path in enumerate(file_paths):
-            for fs in status.files:
-                if fs.name == path.name:
-                    fs.status = FileStatusEnum.PROCESSING
-                    break
+        completed_count = 0
 
-            text = ocr_image(path)
-            ocr_results[path] = text
+        def process_file(path: Path) -> tuple[Path, str]:
+            """Extract text from a single file (runs in thread pool)."""
+            # Mark as processing
+            with progress_lock:
+                for fs in status.files:
+                    if fs.name == path.name:
+                        fs.status = FileStatusEnum.PROCESSING
+                        break
 
-            for fs in status.files:
-                if fs.name == path.name:
-                    fs.status = FileStatusEnum.DONE
-                    break
+            text = extract_text(path)
 
-            status.progress = int((i + 1) / total * 40)  # OCR = 0-40%
+            # Mark as done and update progress
+            with progress_lock:
+                for fs in status.files:
+                    if fs.name == path.name:
+                        fs.status = FileStatusEnum.DONE
+                        break
+
+            return path, text
+
+        # Process files in parallel
+        with ThreadPoolExecutor(max_workers=MAX_OCR_WORKERS) as pool:
+            futures = {pool.submit(process_file, p): p for p in file_paths}
+            for future in as_completed(futures):
+                path, text = future.result()
+                ocr_results[path] = text
+                completed_count += 1
+                with progress_lock:
+                    status.progress = int(completed_count / total * 40)
 
         # ── Step 2: Dedup ──
         status.step = StepEnum.DEDUP
@@ -255,6 +333,13 @@ def run_pipeline(
         status.message = "Готово!"
 
         elapsed = time.time() - start_time
+        logger.info(
+            "pipeline_complete",
+            task_id=task_id,
+            files=total,
+            time=round(elapsed, 1),
+            gpu=GPU_AVAILABLE,
+        )
 
         task_results[task_id] = TaskResult(
             task_id=task_id,
