@@ -140,7 +140,7 @@ def _call_gemini_batch(api_key: str, prompt: str) -> list[dict] | None:
     """Call Gemini API for batch classification."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={api_key}"
+        f"gemini-2.5-flash:generateContent?key={api_key}"
     )
 
     payload = json.dumps({
@@ -185,7 +185,7 @@ def _call_gemini(api_key: str, prompt: str) -> dict | None:
     """Call Gemini API and parse JSON response."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={api_key}"
+        f"gemini-2.5-flash:generateContent?key={api_key}"
     )
 
     payload = json.dumps({

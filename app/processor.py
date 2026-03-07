@@ -442,7 +442,7 @@ def run_pipeline(
                     else:
                         unclassified.append(path)
 
-                batch_size = 15
+                batch_size = 30
                 fids = list(texts_for_gemini.keys())
                 classified_fids: set[str] = set()
 
