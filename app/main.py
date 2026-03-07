@@ -116,7 +116,13 @@ def _format_size(size_bytes: int) -> str:
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "tasks": len(tasks)}
+    import os
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    return {
+        "status": "ok",
+        "tasks": len(tasks),
+        "gemini": "configured" if len(gemini_key) > 10 else "missing",
+    }
 
 
 @app.post("/api/upload", response_model=UploadResponse)
