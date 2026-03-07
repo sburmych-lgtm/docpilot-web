@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 
 import structlog
@@ -48,6 +49,13 @@ def classify_text(text: str) -> dict | None:
             result = _call_gemini(api_key, prompt)
             if result:
                 return result
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                logger.error("gemini_quota_exhausted_single", attempt=attempt + 1)
+            else:
+                logger.warning("gemini_http_error", code=e.code, attempt=attempt + 1)
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAYS[attempt])
         except Exception:
             logger.warning(
                 "gemini_retry",
@@ -112,11 +120,19 @@ def classify_batch(
                             "confidence": item.get("confidence", 0.7),
                         }
                 return output
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                logger.error("gemini_quota_exhausted", attempt=attempt + 1)
+            else:
+                logger.warning("gemini_batch_http_error", code=e.code, attempt=attempt + 1)
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAYS[attempt])
         except Exception:
             logger.warning("gemini_batch_retry", attempt=attempt + 1, exc_info=True)
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAYS[attempt])
 
+    logger.error("gemini_batch_all_retries_failed", docs=len(file_ids))
     return None
 
 

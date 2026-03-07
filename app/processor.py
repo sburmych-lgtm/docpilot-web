@@ -463,6 +463,12 @@ def run_pipeline(
                                 )
                                 classified_fids.add(fid)
                     else:
+                        logger.warning(
+                            "gemini_batch_failed_fallback",
+                            batch_start=batch_start,
+                            batch_size=len(batch_fids),
+                        )
+                        status.message = "Gemini недоступний, класифікуємо локально..."
                         for fid in batch_fids:
                             if fid in classified_fids:
                                 continue
