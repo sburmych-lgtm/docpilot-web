@@ -3,7 +3,7 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 easyocr==1.7.2
 opencv-python-headless==4.10.0.84
-numpy<2
+numpy>=1.26,<3
 Pillow==11.1.0
 img2pdf==0.5.1
 PyPDF2==3.0.1
