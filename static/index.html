@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DocPilot</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg:      #0a0a0a;
+  --s1:      #111111;
+  --s2:      #1a1a1a;
+  --s3:      #242424;
+  --s4:      #2e2e2e;
+  --border:  rgba(255,255,255,0.08);
+  --border2: rgba(255,255,255,0.14);
+  --border3: rgba(255,255,255,0.20);
+  --t1:      #ededed;
+  --t2:      #888;
+  --t3:      #444;
+  --t4:      #333;
+  --green:   #22c55e;
+  --green-d: rgba(34,197,94,0.12);
+  --blue:    #3b82f6;
+  --blue-d:  rgba(59,130,246,0.10);
+  --purple:  #a855f7;
+  --amber:   #f59e0b;
+  --amber-d: rgba(245,158,11,0.12);
+  --red:     #ef4444;
+  --red-d:   rgba(239,68,68,0.10);
+  --sans: 'Geist', system-ui, sans-serif;
+  --mono: 'Geist Mono', monospace;
+}
+
+html { font-size: 16px; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--t1);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  height: 56px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 clamp(16px, 4vw, 32px);
+  border-bottom: 1px solid var(--border);
+  background: rgba(10,10,10,0.90);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.logo {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 15px; font-weight: 600; letter-spacing: -0.3px; color: var(--t1);
+  text-decoration: none; cursor: pointer;
+}
+.logo-mark {
+  width: 22px; height: 22px;
+  background: var(--t1); border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.logo-mark svg { width: 12px; height: 12px; color: #000; }
+.nav-right { display: flex; align-items: center; gap: 8px; }
+.nav-btn {
+  height: 30px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--t2);
+  font-size: 13px; font-family: var(--sans); font-weight: 500;
+  cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.nav-btn:hover { border-color: var(--border2); color: var(--t1); background: var(--s2); }
+.nav-btn.primary { background: var(--t1); color: #000; border-color: var(--t1); }
+.nav-btn.primary:hover { background: #d4d4d4; }
+@media (max-width: 480px) { .nav-btn:not(.primary) { display: none; } }
+
+main {
+  min-height: 100vh; padding-top: 56px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  position: relative;
+  padding-left: clamp(16px, 4vw, 32px);
+  padding-right: clamp(16px, 4vw, 32px);
+}
+main::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 40%, black 0%, transparent 100%);
+}
+
+.screen { display: none; flex-direction: column; align-items: center; width: 100%; }
+.screen.active { display: flex; }
+
+@keyframes fadeUp { from { opacity:0; transform: translateY(18px); } to { opacity:1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+@keyframes scaleIn { from { opacity:0; transform: scale(0.92); } to { opacity:1; transform: scale(1); } }
+@keyframes slideDown { from { opacity:0; transform: translateY(-8px); } to { opacity:1; transform: translateY(0); } }
+@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+@keyframes checkPop { 0% { transform: scale(0) rotate(-10deg); opacity:0; } 60% { transform: scale(1.2) rotate(2deg); opacity:1; } 100% { transform: scale(1) rotate(0deg); opacity:1; } }
+@keyframes badgePop { 0% { transform: scale(0.7); opacity:0; } 70% { transform: scale(1.08); } 100% { transform: scale(1); opacity:1; } }
+@keyframes rowSlide { from { opacity:0; transform: translateX(-10px); } to { opacity:1; transform: translateX(0); } }
+@keyframes floatUp { 0% { transform: translateY(0) scale(1); opacity:1; } 100% { transform: translateY(-40px) scale(0.5); opacity:0; } }
+
+#s-upload { gap: 0; animation: fadeUp .45s ease both; }
+.headline { text-align: center; margin-bottom: 44px; }
+.headline h1 { font-size: clamp(28px, 5vw, 44px); font-weight: 600; letter-spacing: -1.5px; line-height: 1.1; color: var(--t1); margin-bottom: 12px; }
+.headline h1 .dim { color: var(--t3); }
+.headline p { font-size: 15px; color: var(--t2); font-weight: 400; letter-spacing: -0.2px; }
+
+.drop-zone {
+  width: min(560px, 100%);
+  border: 1.5px dashed var(--border2); border-radius: 16px;
+  background: var(--s1);
+  padding: clamp(36px, 6vw, 56px) clamp(20px, 5vw, 40px);
+  display: flex; flex-direction: column; align-items: center; gap: 16px;
+  cursor: pointer; transition: all .22s ease;
+  position: relative; overflow: hidden;
+}
+.drop-zone::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 60% 50% at 50% 100%, rgba(255,255,255,0.03), transparent); pointer-events: none; transition: opacity .3s; }
+.drop-zone::after { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 50% 60% at 50% 50%, rgba(255,255,255,0.04), transparent); opacity: 0; pointer-events: none; transition: opacity .3s; }
+.drop-zone:hover::after, .drop-zone.over::after { opacity: 1; }
+.drop-zone:hover { border-color: rgba(255,255,255,0.28); background: var(--s2); }
+.drop-zone.over { border-color: var(--t1); border-style: solid; background: var(--s2); box-shadow: 0 0 0 3px rgba(255,255,255,0.05), 0 0 40px rgba(255,255,255,0.03); }
+.drop-zone.over .particle { animation: floatUp 1.2s ease-in infinite; }
+
+.drop-icon { width: 48px; height: 48px; background: var(--s3); border: 1px solid var(--border2); border-radius: 12px; display: flex; align-items: center; justify-content: center; transition: all .22s ease; position: relative; z-index: 1; }
+.drop-icon svg { width: 22px; height: 22px; color: var(--t2); transition: color .22s; }
+.drop-zone:hover .drop-icon, .drop-zone.over .drop-icon { background: var(--t1); border-color: var(--t1); transform: translateY(-2px); box-shadow: 0 6px 20px rgba(255,255,255,0.12); }
+.drop-zone:hover .drop-icon svg, .drop-zone.over .drop-icon svg { color: #000; }
+
+.drop-text { text-align: center; position: relative; z-index: 1; }
+.drop-text strong { display: block; font-size: 15px; font-weight: 500; color: var(--t1); margin-bottom: 4px; letter-spacing: -0.2px; }
+.drop-text span { font-size: 13px; color: var(--t2); }
+.drop-text span b { color: var(--t1); font-weight: 500; }
+.drop-formats { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; position: relative; z-index: 1; }
+.fmt { font-size: 11px; font-family: var(--mono); padding: 3px 8px; border-radius: 5px; background: var(--s3); border: 1px solid var(--border); color: var(--t3); letter-spacing: 0.3px; transition: all .15s; }
+.drop-zone:hover .fmt { border-color: var(--border2); color: var(--t2); }
+.drop-sub { font-size: 12px; color: var(--t4); position: relative; z-index: 1; }
+.drag-count { position: absolute; top: 12px; right: 12px; font-size: 11px; font-family: var(--mono); color: var(--t2); opacity: 0; transition: opacity .2s; }
+.drop-zone.over .drag-count { opacity: 1; }
+
+.empty-state { display: none; flex-direction: column; align-items: center; gap: 12px; padding: 40px 24px; text-align: center; }
+.empty-state.active { display: flex; }
+.empty-icon { width: 52px; height: 52px; border: 1px solid var(--border2); border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; color: var(--t3); }
+.empty-title { font-size: 15px; font-weight: 500; color: var(--t2); }
+.empty-sub { font-size: 13px; color: var(--t3); max-width: 260px; line-height: 1.5; }
+.empty-btn { margin-top: 4px; padding: 8px 20px; border: 1px solid var(--border2); border-radius: 8px; background: transparent; color: var(--t1); font-size: 13px; font-weight: 500; font-family: var(--sans); cursor: pointer; transition: all .15s; }
+.empty-btn:hover { background: var(--s2); }
+
+#s-process { gap: 28px; animation: fadeUp .35s ease both; }
+.process-header { text-align: center; }
+.process-header h2 { font-size: clamp(20px, 3vw, 24px); font-weight: 600; letter-spacing: -0.6px; color: var(--t1); margin-bottom: 6px; }
+.process-header p { font-size: 14px; color: var(--t2); }
+.ai-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--t2); font-family: var(--mono); }
+.ai-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--t1); animation: blink 1.3s ease-in-out infinite; }
+.progress-track { width: min(400px, 100%); height: 2px; background: var(--s3); border-radius: 2px; overflow: hidden; }
+.progress-bar { height: 100%; border-radius: 2px; background: var(--t1); width: 0%; transition: width .5s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
+.progress-bar::after { content: ''; position: absolute; right: 0; top: -1px; width: 50px; height: 4px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5)); border-radius: 2px; }
+.progress-pct { font-size: 11px; font-family: var(--mono); color: var(--t3); align-self: flex-end; margin-top: -20px; transition: all .3s; }
+.files-processing { display: flex; flex-direction: column; gap: 5px; width: min(400px, 100%); max-height: 240px; overflow: hidden; position: relative; }
+.files-processing::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(transparent, var(--bg)); pointer-events: none; }
+
+.file-row { display: flex; align-items: center; gap: 10px; padding: 9px 13px; background: var(--s1); border: 1px solid var(--border); border-radius: 8px; opacity: 0; transform: translateY(6px); transition: opacity .25s ease, transform .25s ease, border-color .2s; flex-shrink: 0; }
+.file-row.visible { opacity: 1; transform: translateY(0); }
+.file-row.done { border-color: rgba(34,197,94,0.18); }
+.file-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--s3); transition: all .2s; }
+.file-row.active .file-dot { background: var(--t1); box-shadow: 0 0 8px rgba(255,255,255,0.5); animation: blink 1s ease-in-out infinite; }
+.file-row.done .file-dot { background: var(--green); box-shadow: none; animation: none; }
+.file-ext-badge { font-size: 9px; font-family: var(--mono); font-weight: 500; padding: 2px 5px; border-radius: 4px; background: var(--s3); border: 1px solid var(--border); color: var(--t3); letter-spacing: 0.3px; min-width: 30px; text-align: center; flex-shrink: 0; }
+.file-row-name { font-size: 13px; color: var(--t1); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-row-status { font-size: 11px; font-family: var(--mono); color: var(--t3); transition: color .2s; flex-shrink: 0; }
+.file-row.active .file-row-status { color: var(--t2); }
+.file-row.done .file-row-status { color: var(--green); }
+
+#s-result { gap: 24px; padding-top: 80px; padding-bottom: 60px; align-items: center; animation: fadeUp .4s ease both; }
+.result-header { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.done-badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px 5px 10px; background: var(--green-d); border: 1px solid rgba(34,197,94,0.25); border-radius: 100px; font-size: 12px; font-weight: 500; color: var(--green); animation: badgePop .5s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.done-check { width: 14px; height: 14px; animation: checkPop .45s cubic-bezier(0.34, 1.56, 0.64, 1) .1s both; }
+.result-header h2 { font-size: clamp(22px, 4vw, 28px); font-weight: 600; letter-spacing: -0.8px; color: var(--t1); animation: fadeUp .4s .1s ease both; }
+.result-header p { font-size: 14px; color: var(--t2); animation: fadeUp .4s .15s ease both; }
+.result-time { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-family: var(--mono); color: var(--t3); padding: 3px 10px; background: var(--s2); border: 1px solid var(--border); border-radius: 100px; animation: fadeIn .4s .2s ease both; }
+
+.groups-list { display: flex; flex-direction: column; gap: 5px; width: min(560px, 100%); }
+.group-card { background: var(--s1); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; opacity: 0; transform: translateX(-8px); transition: border-color .15s, background .15s; }
+.group-card.visible { animation: rowSlide .3s ease both; opacity: 1; transform: none; }
+.group-card:hover { border-color: var(--border2); }
+.group-card.expanded { border-color: var(--border2); }
+.group-row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; transition: background .15s; }
+.group-row:hover { background: var(--s2); }
+.group-color { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; transition: box-shadow .2s; }
+.group-card:hover .group-color, .group-card.expanded .group-color { box-shadow: 0 0 8px currentColor; }
+.group-info { flex: 1; min-width: 0; }
+.group-name { font-size: 14px; font-weight: 500; color: var(--t1); margin-bottom: 2px; letter-spacing: -0.2px; }
+.group-meta { font-size: 12px; color: var(--t3); font-family: var(--mono); }
+.group-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.conf-wrap { display: flex; align-items: center; gap: 8px; }
+.conf-track { width: 52px; height: 3px; background: var(--s3); border-radius: 3px; overflow: hidden; }
+.conf-fill { height: 100%; border-radius: 3px; }
+.conf-pct { font-size: 11px; font-family: var(--mono); color: var(--t2); min-width: 28px; text-align: right; }
+.group-chevron { color: var(--t3); transition: transform .25s cubic-bezier(0.4, 0, 0.2, 1); }
+.group-chevron svg { width: 14px; height: 14px; display: block; }
+.group-card.expanded .group-chevron { transform: rotate(90deg); }
+.group-files { max-height: 0; overflow: hidden; transition: max-height .35s cubic-bezier(0.4, 0, 0.2, 1); border-top: 0px solid var(--border); }
+.group-files.open { max-height: 400px; border-top-width: 1px; }
+.group-files-inner { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+.gf-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--s2); border-radius: 7px; font-size: 12.5px; color: var(--t2); cursor: default; opacity: 0; transform: translateY(-4px); transition: opacity .2s ease, transform .2s ease, background .12s; }
+.gf-row.visible { opacity: 1; transform: translateY(0); }
+.gf-row:hover { background: var(--s3); color: var(--t1); }
+.gf-ext { font-size: 9px; font-family: var(--mono); font-weight: 500; padding: 2px 5px; border-radius: 4px; min-width: 28px; text-align: center; flex-shrink: 0; }
+.ext-pdf { background: rgba(239,68,68,0.12); color: #f87171; }
+.ext-doc { background: rgba(59,130,246,0.12); color: #60a5fa; }
+.ext-xls { background: rgba(34,197,94,0.12); color: #4ade80; }
+.ext-jpg, .ext-png { background: rgba(245,158,11,0.12); color: #fbbf24; }
+.ext-zip { background: rgba(168,85,247,0.12); color: #c084fc; }
+.gf-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gf-size { font-family: var(--mono); font-size: 11px; color: var(--t3); flex-shrink: 0; }
+
+.error-card { display: none; width: min(400px, 100%); background: var(--red-d); border: 1px solid rgba(239,68,68,0.2); border-radius: 12px; padding: 20px 20px; flex-direction: column; gap: 8px; align-items: flex-start; }
+.error-card.active { display: flex; animation: scaleIn .3s ease both; }
+.error-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--red); }
+.error-title svg { width: 15px; height: 15px; flex-shrink: 0; }
+.error-desc { font-size: 13px; color: var(--t2); line-height: 1.5; }
+.error-retry { margin-top: 4px; padding: 7px 16px; border: 1px solid rgba(239,68,68,0.3); border-radius: 7px; background: transparent; color: var(--red); font-size: 13px; font-weight: 500; font-family: var(--sans); cursor: pointer; transition: all .15s; }
+.error-retry:hover { background: var(--red-d); }
+
+.review-card { display: none; width: min(560px, 100%); background: var(--amber-d); border: 1px solid rgba(245,158,11,0.2); border-radius: 10px; padding: 13px 16px; align-items: center; gap: 10px; }
+.review-card.active { display: flex; animation: slideDown .3s ease both; }
+.review-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); flex-shrink: 0; }
+.review-text { flex: 1; font-size: 13px; color: var(--t2); }
+.review-text b { color: var(--amber); font-weight: 500; }
+.review-action { padding: 5px 12px; border: 1px solid rgba(245,158,11,0.3); border-radius: 6px; background: transparent; color: var(--amber); font-size: 12px; font-weight: 500; font-family: var(--sans); cursor: pointer; transition: all .15s; flex-shrink: 0; }
+.review-action:hover { background: var(--amber-d); }
+
+.result-actions { display: flex; gap: 8px; width: min(560px, 100%); flex-wrap: wrap; animation: fadeUp .4s .3s ease both; }
+.action-btn { flex: 1; min-width: 120px; height: 44px; border-radius: 10px; border: 1px solid var(--border); background: var(--s1); color: var(--t1); font-size: 14px; font-weight: 500; font-family: var(--sans); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; transition: all .15s; letter-spacing: -0.2px; white-space: nowrap; }
+.action-btn:hover { background: var(--s2); border-color: var(--border2); }
+.action-btn.main { flex: 2; background: var(--t1); color: #000; border-color: var(--t1); font-weight: 600; }
+.action-btn.main:hover { background: #d4d4d4; }
+.action-btn.success { background: var(--green) !important; border-color: var(--green) !important; color: #000 !important; }
+.action-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+.restart-btn { font-size: 12px; color: var(--t3); background: none; border: none; cursor: pointer; font-family: var(--sans); transition: color .15s; display: flex; align-items: center; gap: 5px; animation: fadeIn .4s .4s ease both; }
+.restart-btn:hover { color: var(--t2); }
+.restart-btn svg { width: 12px; height: 12px; }
+
+@media (max-width: 600px) {
+  .result-actions { flex-direction: column; }
+  .action-btn { flex: none; width: 100%; }
+  .group-right .conf-wrap { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition-duration: 0ms !important; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="logo" onclick="restart()">
+    <div class="logo-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+    </div>
+    DocPilot
+  </a>
+  <div class="nav-right">
+    <button class="nav-btn">Увійти</button>
+    <button class="nav-btn primary">Почати безкоштовно</button>
+  </div>
+</nav>
+
+<main>
+  <div class="screen active" id="s-upload">
+    <div class="headline">
+      <h1>Завантаж файли.<br><span class="dim">Ми впорядкуємо решту.</span></h1>
+      <p>Документи → розпізнавання → групування → один файл</p>
+    </div>
+    <div class="drop-zone" id="dropZone">
+      <span class="drag-count" id="dragCount"></span>
+      <div class="drop-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <div class="drop-text">
+        <strong>Перетягни файли або натисни</strong>
+        <span>PDF, DOCX, XLSX, JPG, PNG — до <b>50 файлів</b></span>
+      </div>
+      <div class="drop-formats">
+        <span class="fmt">PDF</span>
+        <span class="fmt">DOCX</span>
+        <span class="fmt">XLSX</span>
+        <span class="fmt">JPG</span>
+        <span class="fmt">PNG</span>
+      </div>
+      <p class="drop-sub">Файли не зберігаються після сесії</p>
+    </div>
+    <div class="empty-state" id="emptyState" style="display:none; margin-top:20px;">
+      <div class="empty-icon">📄</div>
+      <div class="empty-title">Потрібно більше одного файлу</div>
+      <div class="empty-sub">Для групування потрібно щонайменше 2 файли. Додай ще кілька документів.</div>
+      <button class="empty-btn" onclick="document.getElementById('dropZone').click()">Додати файли</button>
+    </div>
+  </div>
+
+  <div class="screen" id="s-process">
+    <div class="process-header">
+      <h2>Аналізуємо документи…</h2>
+      <p>Знаходимо зв'язки між файлами за змістом</p>
+    </div>
+    <div class="ai-status">
+      <div class="ai-dot"></div>
+      <span id="aiMsg">Читаємо текст документів...</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div class="progress-pct" id="progressPct">0%</div>
+    <div class="files-processing" id="filesList"></div>
+    <div class="error-card" id="errorCard">
+      <div class="error-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        Не вдалося обробити файл
+      </div>
+      <div class="error-desc" id="errorDesc">Помилка обробки</div>
+      <button class="error-retry" onclick="hideError()">Зрозумів, продовжити</button>
+    </div>
+  </div>
+
+  <div class="screen" id="s-result">
+    <div class="result-header">
+      <div class="done-badge">
+        <svg class="done-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        Готово
+      </div>
+      <h2 id="resultTitle"></h2>
+      <p id="resultDesc"></p>
+      <div class="result-time" id="resultTime"></div>
+    </div>
+    <div class="review-card" id="reviewCard">
+      <div class="review-dot"></div>
+      <div class="review-text"><b>1 файл</b> не вдалося класифікувати</div>
+      <button class="review-action">Переглянути</button>
+    </div>
+    <div class="groups-list" id="groupsList"></div>
+    <div class="result-actions">
+      <button class="action-btn" onclick="shareResults()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        Поділитись
+      </button>
+      <button class="action-btn main" id="downloadBtn" onclick="exportDone()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Завантажити PDF
+      </button>
+    </div>
+    <button class="restart-btn" onclick="restart()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.8"/></svg>
+      Почати з новими файлами
+    </button>
+  </div>
+</main>
+
+<script>
+let currentTaskId = null;
+let pollInterval = null;
+
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+const zone = document.getElementById('dropZone');
+
+zone.addEventListener('dragover', e => {
+  e.preventDefault();
+  zone.classList.add('over');
+  const count = e.dataTransfer.items?.length || '?';
+  document.getElementById('dragCount').textContent = count + ' файлів';
+});
+zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('over');
+  const files = e.dataTransfer.files;
+  if (files.length === 1) { showEmptyState(); return; }
+  startProcessing(files);
+});
+zone.addEventListener('click', () => {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.multiple = true;
+  inp.accept = '.pdf,.jpg,.jpeg,.png,.docx,.xlsx,.tiff,.tif,.bmp';
+  inp.onchange = () => {
+    if (inp.files.length === 1) { showEmptyState(); return; }
+    startProcessing(inp.files);
+  };
+  inp.click();
+});
+
+function showEmptyState() {
+  const el = document.getElementById('emptyState');
+  el.style.display = 'flex';
+  setTimeout(() => el.style.animation = 'slideDown .3s ease both', 10);
+}
+
+async function startProcessing(files) {
+  document.getElementById('emptyState').style.display = 'none';
+  show('s-process');
+  document.getElementById('errorCard').classList.remove('active');
+
+  const list = document.getElementById('filesList');
+  const bar = document.getElementById('progressBar');
+  const pct = document.getElementById('progressPct');
+  const msg = document.getElementById('aiMsg');
+  list.innerHTML = '';
+  bar.style.width = '0%';
+  pct.textContent = '0%';
+  msg.textContent = 'Завантажуємо файли...';
+
+  const fileArr = Array.from(files);
+  fileArr.forEach(f => {
+    const ext = f.name.split('.').pop().toUpperCase();
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    row.dataset.name = f.name;
+    row.innerHTML = `
+      <div class="file-dot"></div>
+      <span class="file-ext-badge">${ext}</span>
+      <span class="file-row-name">${f.name}</span>
+      <span class="file-row-status">в черзі</span>
+    `;
+    list.appendChild(row);
+  });
+
+  const rows = list.querySelectorAll('.file-row');
+  rows.forEach((r, i) => setTimeout(() => r.classList.add('visible'), i * 60));
+
+  const formData = new FormData();
+  fileArr.forEach(f => formData.append('files', f));
+
+  try {
+    const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+    if (!resp.ok) {
+      const err = await resp.json();
+      showError(err.error || 'Помилка завантаження');
+      return;
+    }
+    const data = await resp.json();
+    currentTaskId = data.task_id;
+    pollInterval = setInterval(pollStatus, 2000);
+    pollStatus();
+  } catch (e) {
+    showError("Не вдалося з'єднатися з сервером");
+  }
+}
+
+async function pollStatus() {
+  if (!currentTaskId) return;
+  try {
+    const resp = await fetch(`/api/status/${currentTaskId}`);
+    if (!resp.ok) return;
+    const status = await resp.json();
+
+    document.getElementById('progressBar').style.width = status.progress + '%';
+    document.getElementById('progressPct').textContent = status.progress + '%';
+
+    const stepMsgs = {
+      uploading: 'Завантажуємо файли...',
+      ocr: 'Читаємо текст документів...',
+      dedup: 'Шукаємо дублікати...',
+      classifying: 'Класифікуємо документи...',
+      building_pdf: 'Створюємо PDF файли...',
+      done: 'Готово!',
+      error: 'Помилка обробки',
+    };
+    document.getElementById('aiMsg').textContent = status.message || stepMsgs[status.step] || 'Обробка...';
+
+    if (status.files) {
+      const list = document.getElementById('filesList');
+      status.files.forEach(f => {
+        const row = list.querySelector(`[data-name="${CSS.escape(f.name)}"]`);
+        if (!row) return;
+        row.classList.remove('active', 'done');
+        const st = row.querySelector('.file-row-status');
+        if (f.status === 'processing') { row.classList.add('active'); st.textContent = 'обробка...'; }
+        else if (f.status === 'done') { row.classList.add('done'); st.textContent = '✓'; }
+        else if (f.status === 'error') { row.classList.add('done'); st.textContent = '✗'; st.style.color = 'var(--red)'; }
+      });
+    }
+
+    if (status.step === 'done') {
+      clearInterval(pollInterval); pollInterval = null;
+      setTimeout(showResult, 700);
+    } else if (status.step === 'error') {
+      clearInterval(pollInterval); pollInterval = null;
+      showError(status.message || 'Помилка обробки');
+    }
+  } catch (e) { /* keep polling */ }
+}
+
+function showError(message) {
+  document.getElementById('errorDesc').textContent = message;
+  document.getElementById('errorCard').classList.add('active');
+}
+
+async function showResult() {
+  if (!currentTaskId) return;
+  try {
+    const resp = await fetch(`/api/result/${currentTaskId}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    document.getElementById('resultTitle').textContent =
+      `Знайдено ${data.groups.length} ${groupWord(data.groups.length)} з ${data.total_files} файлів`;
+    document.getElementById('resultDesc').textContent =
+      data.duplicates_removed > 0
+        ? `Документи впорядковано · ${data.duplicates_removed} дублікатів видалено`
+        : 'Документи впорядковано за змістом';
+    document.getElementById('resultTime').innerHTML =
+      `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Оброблено за ${data.processing_time} сек`;
+
+    const gl = document.getElementById('groupsList');
+    gl.innerHTML = '';
+
+    data.groups.forEach(g => {
+      const card = document.createElement('div');
+      card.className = 'group-card';
+      card.onclick = () => toggleGroup(card);
+
+      const filesHtml = g.files.map(f =>
+        `<div class="gf-row"><span class="gf-ext ${getExtClass(f.ext)}">${f.ext}</span><span class="gf-name">${f.name}</span><span class="gf-size">${f.size}</span></div>`
+      ).join('');
+
+      card.innerHTML = `
+        <div class="group-row">
+          <div class="group-color" style="background:${g.color};color:${g.color}"></div>
+          <div class="group-info">
+            <div class="group-name">${g.name}</div>
+            <div class="group-meta">${g.file_count} ${fileWord(g.file_count)} · ${g.method}</div>
+          </div>
+          <div class="group-right">
+            <div class="conf-wrap">
+              <div class="conf-track"><div class="conf-fill" style="width:${g.confidence}%;background:${g.color}"></div></div>
+              <span class="conf-pct">${g.confidence}%</span>
+            </div>
+            <div class="group-chevron"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></div>
+          </div>
+        </div>
+        <div class="group-files"><div class="group-files-inner">${filesHtml}</div></div>`;
+      gl.appendChild(card);
+    });
+
+    const rc = document.getElementById('reviewCard');
+    if (data.unclassified_count > 0) {
+      rc.querySelector('.review-text').innerHTML = `<b>${data.unclassified_count} ${fileWord(data.unclassified_count)}</b> не вдалося класифікувати — перевір вручну`;
+      rc.classList.add('active');
+    } else { rc.classList.remove('active'); }
+
+    show('s-result');
+    document.querySelectorAll('#groupsList .group-card').forEach((c, i) =>
+      setTimeout(() => c.classList.add('visible'), i * 90 + 80));
+  } catch (e) { console.error('Result fetch error:', e); }
+}
+
+function getExtClass(ext) {
+  ext = ext.toLowerCase();
+  if (ext === 'pdf') return 'ext-pdf';
+  if (ext === 'doc' || ext === 'docx') return 'ext-doc';
+  if (ext === 'xls' || ext === 'xlsx') return 'ext-xls';
+  if (['jpg','jpeg','png','tiff','bmp'].includes(ext)) return 'ext-jpg';
+  return 'ext-zip';
+}
+
+function groupWord(n) { return n === 1 ? 'групу' : n >= 2 && n <= 4 ? 'групи' : 'груп'; }
+function fileWord(n) { return n === 1 ? 'файл' : n >= 2 && n <= 4 ? 'файли' : 'файлів'; }
+
+function toggleGroup(card) {
+  const files = card.querySelector('.group-files');
+  const isOpen = card.classList.contains('expanded');
+  document.querySelectorAll('.group-card').forEach(c => {
+    c.classList.remove('expanded');
+    c.querySelector('.group-files').classList.remove('open');
+    c.querySelectorAll('.gf-row').forEach(r => r.classList.remove('visible'));
+  });
+  if (!isOpen) {
+    card.classList.add('expanded');
+    files.classList.add('open');
+    card.querySelectorAll('.gf-row').forEach((r, i) =>
+      setTimeout(() => r.classList.add('visible'), i * 55 + 80));
+  }
+}
+
+function exportDone() {
+  if (!currentTaskId) return;
+  window.open(`/api/download/${currentTaskId}`, '_blank');
+  const btn = document.getElementById('downloadBtn');
+  const orig = btn.innerHTML;
+  btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><polyline points="20 6 9 17 4 12"/></svg> Збережено!`;
+  btn.classList.add('success');
+  setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('success'); }, 2200);
+}
+
+function shareResults() {
+  navigator.clipboard?.writeText(window.location.href).catch(() => {});
+  const btn = event.target.closest('.action-btn');
+  const orig = btn.innerHTML;
+  btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px"><polyline points="20 6 9 17 4 12"/></svg> Скопійовано`;
+  setTimeout(() => btn.innerHTML = orig, 1800);
+}
+
+function hideError() { document.getElementById('errorCard').classList.remove('active'); }
+
+function restart() {
+  currentTaskId = null;
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  document.getElementById('reviewCard').classList.remove('active');
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('progressPct').textContent = '0%';
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('groupsList').innerHTML = '';
+  show('s-upload');
+}
+</script>
+</body>
+</html>
