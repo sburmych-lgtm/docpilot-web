@@ -146,6 +146,46 @@ main::before {
 .fmt { font-size: 11px; font-family: var(--mono); padding: 3px 8px; border-radius: 5px; background: var(--s3); border: 1px solid var(--border); color: var(--t3); letter-spacing: 0.3px; transition: all .15s; }
 .drop-zone:hover .fmt { border-color: var(--border2); color: var(--t2); }
 .drop-sub { font-size: 12px; color: var(--t4); position: relative; z-index: 1; }
+
+.mode-section { width: min(560px, 100%); margin-top: 20px; }
+.mode-tabs {
+  display: flex; gap: 0; border: 1px solid var(--border2); border-radius: 10px;
+  overflow: hidden; background: var(--s1);
+}
+.mode-tab {
+  flex: 1; padding: 11px 16px; border: none; background: transparent;
+  color: var(--t2); font-size: 13px; font-weight: 500; font-family: var(--sans);
+  cursor: pointer; transition: all .18s; text-align: center;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  position: relative;
+}
+.mode-tab:first-child { border-right: 1px solid var(--border2); }
+.mode-tab:hover { color: var(--t1); background: var(--s2); }
+.mode-tab.active {
+  background: var(--s3); color: var(--t1); font-weight: 600;
+}
+.mode-tab .mode-icon { width: 15px; height: 15px; flex-shrink: 0; }
+.mode-tab .mode-badge {
+  font-size: 9px; font-family: var(--mono); padding: 1px 6px;
+  border-radius: 4px; background: var(--green-d); color: var(--green);
+  letter-spacing: 0.3px; font-weight: 500;
+}
+.mode-hint {
+  font-size: 12px; color: var(--t3); margin-top: 10px; line-height: 1.5;
+  padding: 0 2px; transition: all .2s;
+}
+.ai-options { display: none; margin-top: 10px; }
+.ai-options.open { display: block; }
+.instruction-input {
+  width: 100%; min-height: 72px; max-height: 140px;
+  padding: 12px 14px; border-radius: 10px;
+  background: var(--s1); border: 1px solid var(--border2);
+  color: var(--t1); font-size: 13px; font-family: var(--sans);
+  resize: vertical; outline: none; transition: border-color .2s; line-height: 1.5;
+}
+.instruction-input::placeholder { color: var(--t3); }
+.instruction-input:focus { border-color: var(--border3); }
+.instruction-hint { font-size: 11px; color: var(--t3); margin-top: 6px; line-height: 1.4; }
 .drag-count { position: absolute; top: 12px; right: 12px; font-size: 11px; font-family: var(--mono); color: var(--t2); opacity: 0; transition: opacity .2s; }
 .drop-zone.over .drag-count { opacity: 1; }
 
@@ -308,6 +348,24 @@ main::before {
       </div>
       <p class="drop-sub">Файли не зберігаються після сесії</p>
     </div>
+    <div class="mode-section">
+      <div class="mode-tabs">
+        <button class="mode-tab active" id="tabSimple" onclick="setMode('simple')">
+          <svg class="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Простий
+          <span class="mode-badge">ШВИДКО</span>
+        </button>
+        <button class="mode-tab" id="tabAi" onclick="setMode('ai')">
+          <svg class="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v1a3 3 0 0 1 3 3v1a3 3 0 0 1-3 3h-1v3l-3-3H8a3 3 0 0 1-3-3v-1a3 3 0 0 1 3-3V6a4 4 0 0 1 4-4z"/></svg>
+          AI
+        </button>
+      </div>
+      <p class="mode-hint" id="modeHint">Групування за датами та метаданими — без AI, за секунди</p>
+      <div class="ai-options" id="aiOptions">
+        <textarea class="instruction-input" id="instructionInput" placeholder="Наприклад: Розділи документи на справи по Петренку. Має бути 3 справи."></textarea>
+        <p class="instruction-hint">AI читає вміст кожного файлу (OCR) і групує за інструкцією. Займає 15-25 хв для 500+ файлів.</p>
+      </div>
+    </div>
     <div class="empty-state" id="emptyState" style="display:none; margin-top:20px;">
       <div class="empty-icon">📄</div>
       <div class="empty-title">Потрібно більше одного файлу</div>
@@ -378,6 +436,7 @@ main::before {
 <script>
 let currentTaskId = null;
 let pollInterval = null;
+let currentMode = 'simple';
 
 function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -412,6 +471,16 @@ zone.addEventListener('click', () => {
   inp.click();
 });
 
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('tabSimple').classList.toggle('active', mode === 'simple');
+  document.getElementById('tabAi').classList.toggle('active', mode === 'ai');
+  document.getElementById('aiOptions').classList.toggle('open', mode === 'ai');
+  document.getElementById('modeHint').textContent = mode === 'simple'
+    ? 'Групування за датами та метаданими — без AI, за секунди'
+    : 'AI читає вміст (OCR) і класифікує за інструкцією';
+}
+
 function showEmptyState() {
   const el = document.getElementById('emptyState');
   el.style.display = 'flex';
@@ -427,10 +496,20 @@ async function startProcessing(files) {
   const bar = document.getElementById('progressBar');
   const pct = document.getElementById('progressPct');
   const msg = document.getElementById('aiMsg');
-  list.innerHTML = '';
+  list.textContent = '';
   bar.style.width = '0%';
   pct.textContent = '0%';
   msg.textContent = 'Завантажуємо файли...';
+
+  // Update header based on mode
+  const header = document.querySelector('.process-header');
+  if (currentMode === 'simple') {
+    header.querySelector('h2').textContent = 'Сортуємо за датами…';
+    header.querySelector('p').textContent = 'Групуємо файли за метаданими';
+  } else {
+    header.querySelector('h2').textContent = 'Аналізуємо документи…';
+    header.querySelector('p').textContent = 'Знаходимо зв\'язки між файлами за змістом';
+  }
 
   const fileArr = Array.from(files);
   fileArr.forEach(f => {
@@ -438,30 +517,76 @@ async function startProcessing(files) {
     const row = document.createElement('div');
     row.className = 'file-row';
     row.dataset.name = f.name;
-    row.innerHTML = `
-      <div class="file-dot"></div>
-      <span class="file-ext-badge">${ext}</span>
-      <span class="file-row-name">${f.name}</span>
-      <span class="file-row-status">в черзі</span>
-    `;
+
+    const dot = document.createElement('div');
+    dot.className = 'file-dot';
+    const extBadge = document.createElement('span');
+    extBadge.className = 'file-ext-badge';
+    extBadge.textContent = ext;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-row-name';
+    nameSpan.textContent = f.name;
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'file-row-status';
+    statusSpan.textContent = 'в черзі';
+
+    row.appendChild(dot);
+    row.appendChild(extBadge);
+    row.appendChild(nameSpan);
+    row.appendChild(statusSpan);
     list.appendChild(row);
   });
 
   const rows = list.querySelectorAll('.file-row');
-  rows.forEach((r, i) => setTimeout(() => r.classList.add('visible'), i * 60));
+  const animDelay = fileArr.length > 100 ? 10 : 60;
+  rows.forEach((r, i) => setTimeout(() => r.classList.add('visible'), i * animDelay));
 
-  const formData = new FormData();
-  fileArr.forEach(f => formData.append('files', f));
+  const BATCH_SIZE = 30;
 
   try {
-    const resp = await fetch('/api/upload', { method: 'POST', body: formData });
-    if (!resp.ok) {
-      const err = await resp.json();
-      showError(err.error || 'Помилка завантаження');
+    // Step 1: Create task with mode + optional instruction
+    const instruction = (currentMode === 'ai' && document.getElementById('instructionInput'))
+      ? document.getElementById('instructionInput').value.trim()
+      : '';
+    const createResp = await fetch('/api/task/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction, mode: currentMode }),
+    });
+    if (!createResp.ok) { showError('Помилка створення задачі'); return; }
+    const { task_id } = await createResp.json();
+    currentTaskId = task_id;
+
+    // Step 2: Upload files in batches
+    const totalBatches = Math.ceil(fileArr.length / BATCH_SIZE);
+    for (let i = 0; i < totalBatches; i++) {
+      const batch = fileArr.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
+      const formData = new FormData();
+      batch.forEach(f => formData.append('files', f));
+
+      const batchResp = await fetch(`/api/task/${task_id}/files`, { method: 'POST', body: formData });
+      if (!batchResp.ok) {
+        showError('Помилка завантаження батчу ' + (i + 1) + '/' + totalBatches);
+        return;
+      }
+
+      const uploaded = Math.min((i + 1) * BATCH_SIZE, fileArr.length);
+      msg.textContent = 'Завантажуємо файли... ' + uploaded + '/' + fileArr.length;
+    }
+
+    // Step 3: Start processing
+    msg.textContent = 'Починаємо обробку...';
+    const startResp = await fetch('/api/task/' + task_id + '/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction, mode: currentMode }),
+    });
+    if (!startResp.ok) {
+      const err = await startResp.json();
+      showError(err.error || 'Помилка запуску обробки');
       return;
     }
-    const data = await resp.json();
-    currentTaskId = data.task_id;
+
     pollInterval = setInterval(pollStatus, 2000);
     pollStatus();
   } catch (e) {
@@ -481,6 +606,7 @@ async function pollStatus() {
 
     const stepMsgs = {
       uploading: 'Завантажуємо файли...',
+      metadata: 'Читаємо метадані файлів...',
       ocr: 'Читаємо текст документів...',
       dedup: 'Шукаємо дублікати...',
       classifying: 'Класифікуємо документи...',

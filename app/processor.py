@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,7 @@ import torch
 from PyPDF2 import PdfReader
 
 from app.dedup import find_duplicates
-from app.gemini import classify_text
+from app.gemini import classify_batch, classify_text
 from app.models import (
     FileStatusEnum,
     Group,
@@ -35,7 +37,7 @@ _reader: Any = None
 _reader_lock = threading.Lock()
 
 GPU_AVAILABLE = torch.cuda.is_available()
-MAX_OCR_WORKERS = 4  # parallel file processing threads
+MAX_OCR_WORKERS = 2 if GPU_AVAILABLE else 4  # fewer threads on GPU to avoid VRAM OOM
 
 
 def get_reader() -> Any:
@@ -82,6 +84,7 @@ GROUP_COLORS = [
 ]
 
 MIN_TEXT_LENGTH = 20  # minimum chars to consider PDF text valid
+SESSION_GAP_MINUTES = 30  # gap between photo sessions
 
 
 def format_file_size(size_bytes: int) -> str:
@@ -89,6 +92,115 @@ def format_file_size(size_bytes: int) -> str:
     if size_bytes > 1_048_576:
         return f"{size_bytes / 1_048_576:.1f} MB"
     return f"{size_bytes // 1024} KB"
+
+
+# ── Metadata extraction (Simple mode) ──
+
+
+def extract_metadata_date(file_path: Path) -> datetime:
+    """Extract date/time from file metadata.
+
+    Priority: EXIF DateTimeOriginal > EXIF DateTime > PDF CreationDate > file mtime.
+    Always returns a datetime (file mtime as ultimate fallback).
+    """
+    suffix = file_path.suffix.lower()
+
+    # Images: try EXIF
+    if suffix in {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp"}:
+        try:
+            from PIL import Image  # type: ignore[import-untyped]
+            from PIL.ExifTags import Base as ExifBase  # type: ignore[import-untyped]
+
+            with Image.open(file_path) as img:
+                exif = img.getexif()
+                if exif:
+                    # DateTimeOriginal (tag 36867) > DateTime (tag 306)
+                    for tag_id in (ExifBase.DateTimeOriginal, ExifBase.DateTime):
+                        val = exif.get(tag_id)
+                        if val:
+                            try:
+                                return datetime.strptime(val, "%Y:%m:%d %H:%M:%S")
+                            except (ValueError, TypeError):
+                                continue
+        except Exception:
+            logger.debug("exif_read_failed", path=file_path.name)
+
+    # PDFs: try CreationDate
+    if suffix == ".pdf":
+        try:
+            reader = PdfReader(str(file_path))
+            info = reader.metadata
+            if info and info.creation_date:
+                return info.creation_date.replace(tzinfo=None)
+        except Exception:
+            logger.debug("pdf_date_read_failed", path=file_path.name)
+
+    # Fallback: file modification time
+    return datetime.fromtimestamp(os.path.getmtime(file_path))
+
+
+def classify_by_metadata(
+    file_paths: list[Path],
+    gap_minutes: int = SESSION_GAP_MINUTES,
+) -> dict[str, list[tuple[Path, int, str]]]:
+    """Group files into sessions based on metadata timestamps.
+
+    Files photographed within `gap_minutes` of each other belong to the same session.
+    Returns groups dict: { "session_name": [(path, confidence, method), ...] }
+    """
+    # Extract dates for all files
+    dated: list[tuple[Path, datetime]] = []
+    for p in file_paths:
+        dt = extract_metadata_date(p)
+        dated.append((p, dt))
+
+    # Sort by date
+    dated.sort(key=lambda x: x[1])
+
+    if not dated:
+        return {}
+
+    # Split into sessions by gap
+    sessions: list[list[tuple[Path, datetime]]] = []
+    current_session: list[tuple[Path, datetime]] = [dated[0]]
+
+    for i in range(1, len(dated)):
+        gap = (dated[i][1] - dated[i - 1][1]).total_seconds() / 60
+        if gap > gap_minutes:
+            sessions.append(current_session)
+            current_session = [dated[i]]
+        else:
+            current_session.append(dated[i])
+    sessions.append(current_session)
+
+    # Build groups with readable names
+    groups: dict[str, list[tuple[Path, int, str]]] = {}
+    for session in sessions:
+        first_dt = session[0][1]
+        last_dt = session[-1][1]
+
+        if first_dt.date() == last_dt.date():
+            # Same day: "05.03.2026 13:10-13:45"
+            name = (
+                f"{first_dt.strftime('%d.%m.%Y')} "
+                f"{first_dt.strftime('%H:%M')}-{last_dt.strftime('%H:%M')}"
+            )
+        else:
+            # Different days
+            name = (
+                f"{first_dt.strftime('%d.%m.%Y %H:%M')} — "
+                f"{last_dt.strftime('%d.%m.%Y %H:%M')}"
+            )
+
+        items = [(p, 90, "metadata") for p, _ in session]
+        groups[name] = items
+
+    logger.info(
+        "metadata_classification",
+        total_files=len(file_paths),
+        sessions=len(sessions),
+    )
+    return groups
 
 
 # ── Text extraction ──
@@ -125,9 +237,16 @@ def ocr_image(file_path: Path) -> str:
         if img is None:
             return ""
         results = reader.readtext(img, detail=0)
-        return "\n".join(results) if results else ""
+        text = "\n".join(results) if results else ""
+        # Free image memory immediately
+        del img, raw
+        if GPU_AVAILABLE:
+            torch.cuda.empty_cache()
+        return text
     except Exception:
         logger.warning("ocr_failed", path=str(file_path), exc_info=True)
+        if GPU_AVAILABLE:
+            torch.cuda.empty_cache()
         return ""
 
 
@@ -193,8 +312,13 @@ def run_pipeline(
     file_paths: list[Path],
     task_results: dict,
     task_output_dirs: dict,
+    instruction: str = "",
+    mode: str = "simple",
 ) -> None:
     """Run the full processing pipeline.
+
+    Args:
+        mode: "simple" (metadata-based, no OCR) or "ai" (OCR + classify).
 
     Updates tasks[task_id] in-place with progress.
     """
@@ -205,87 +329,192 @@ def run_pipeline(
     try:
         total = len(file_paths)
 
-        # ── Step 1: Extract text (PDF text layer + OCR) ──
-        status.step = StepEnum.OCR
-        status.message = "Читаємо текст документів..."
+        if mode == "simple":
+            # ═══════════════════════════════════════════
+            # SIMPLE MODE: metadata → dedup → sessions → PDF
+            # ═══════════════════════════════════════════
+            status.step = StepEnum.METADATA
+            status.message = "Читаємо метадані файлів..."
+            status.progress = 10
 
-        ocr_results: dict[Path, str] = {}
-        completed_count = 0
+            # Mark all files as processing then done quickly
+            for fs in status.files:
+                fs.status = FileStatusEnum.PROCESSING
+            status.progress = 20
 
-        def process_file(path: Path) -> tuple[Path, str]:
-            """Extract text from a single file (runs in thread pool)."""
-            # Mark as processing
-            with progress_lock:
-                for fs in status.files:
-                    if fs.name == path.name:
-                        fs.status = FileStatusEnum.PROCESSING
-                        break
+            for fs in status.files:
+                fs.status = FileStatusEnum.DONE
+            status.progress = 30
 
-            text = extract_text(path)
+            # ── Dedup ──
+            status.step = StepEnum.DEDUP
+            status.message = "Шукаємо дублікати..."
+            status.progress = 35
 
-            # Mark as done and update progress
-            with progress_lock:
-                for fs in status.files:
-                    if fs.name == path.name:
-                        fs.status = FileStatusEnum.DONE
-                        break
+            unique_paths, dup_paths = find_duplicates(file_paths)
+            duplicates_removed = len(dup_paths)
+            active_paths = [p for p in file_paths if p not in set(dup_paths)]
+            status.progress = 45
 
-            return path, text
+            # ── Classify by metadata ──
+            status.step = StepEnum.CLASSIFYING
+            status.message = "Групуємо за датами..."
+            status.progress = 50
 
-        # Process files in parallel
-        with ThreadPoolExecutor(max_workers=MAX_OCR_WORKERS) as pool:
-            futures = {pool.submit(process_file, p): p for p in file_paths}
-            for future in as_completed(futures):
-                path, text = future.result()
-                ocr_results[path] = text
-                completed_count += 1
+            groups = classify_by_metadata(active_paths)
+            unclassified: list[Path] = []
+
+            status.progress = 70
+
+        else:
+            # ═══════════════════════════════════════════
+            # AI MODE: OCR → dedup → classify → PDF
+            # ═══════════════════════════════════════════
+
+            # ── Step 1: Extract text (PDF text layer + OCR) ──
+            status.step = StepEnum.OCR
+            status.message = "Читаємо текст документів..."
+
+            ocr_results: dict[Path, str] = {}
+            completed_count = 0
+
+            def process_file(path: Path) -> tuple[Path, str]:
+                """Extract text from a single file (runs in thread pool)."""
                 with progress_lock:
-                    status.progress = int(completed_count / total * 40)
+                    for fs in status.files:
+                        if fs.name == path.name:
+                            fs.status = FileStatusEnum.PROCESSING
+                            break
 
-        # ── Step 2: Dedup ──
-        status.step = StepEnum.DEDUP
-        status.message = "Шукаємо дублікати..."
-        status.progress = 45
+                text = extract_text(path)
 
-        unique_paths, dup_paths = find_duplicates(file_paths)
-        duplicates_removed = len(dup_paths)
+                with progress_lock:
+                    for fs in status.files:
+                        if fs.name == path.name:
+                            fs.status = FileStatusEnum.DONE
+                            break
 
-        for dp in dup_paths:
-            ocr_results.pop(dp, None)
+                return path, text
 
-        status.progress = 50
+            workers = 1 if (GPU_AVAILABLE and total > 50) else MAX_OCR_WORKERS
+            logger.info("ocr_start", total=total, workers=workers, gpu=GPU_AVAILABLE)
 
-        # ── Step 3: Classify ──
-        status.step = StepEnum.CLASSIFYING
-        status.message = "Класифікуємо документи..."
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(process_file, p): p for p in file_paths}
+                for future in as_completed(futures):
+                    path, text = future.result()
+                    ocr_results[path] = text
+                    completed_count += 1
+                    with progress_lock:
+                        status.progress = int(completed_count / total * 40)
 
-        groups: dict[str, list[tuple[Path, int, str]]] = {}
-        unclassified: list[Path] = []
+            # ── Step 2: Dedup ──
+            status.step = StepEnum.DEDUP
+            status.message = "Шукаємо дублікати..."
+            status.progress = 45
 
-        for path, text in ocr_results.items():
-            if not text.strip():
-                unclassified.append(path)
-                continue
+            unique_paths, dup_paths = find_duplicates(file_paths)
+            duplicates_removed = len(dup_paths)
 
-            # Waterfall: Regex → Keyword → Gemini
-            result = classify_by_regex(text)
-            if result is None:
-                result = classify_by_keyword(text)
-            if result is None:
-                result = classify_by_gemini(text)
+            for dp in dup_paths:
+                ocr_results.pop(dp, None)
 
-            if result:
-                cat_name, method, confidence = result
-                groups.setdefault(cat_name, []).append((path, confidence, method))
+            status.progress = 50
+
+            # ── Step 3: Classify ──
+            status.step = StepEnum.CLASSIFYING
+            status.message = "Класифікуємо документи..."
+
+            groups: dict[str, list[tuple[Path, int, str]]] = {}
+            unclassified: list[Path] = []
+
+            if instruction:
+                # ── Instruction-based: Gemini batch classification ──
+                status.message = "AI класифікує за інструкцією..."
+                texts_for_gemini: dict[str, str] = {}
+                path_map: dict[str, Path] = {}
+
+                for path, text in ocr_results.items():
+                    if text.strip():
+                        fid = path.name
+                        texts_for_gemini[fid] = text
+                        path_map[fid] = path
+                    else:
+                        unclassified.append(path)
+
+                batch_size = 15
+                fids = list(texts_for_gemini.keys())
+                classified_fids: set[str] = set()
+
+                for batch_start in range(0, len(fids), batch_size):
+                    batch_fids = fids[batch_start:batch_start + batch_size]
+                    batch_texts = {fid: texts_for_gemini[fid] for fid in batch_fids}
+
+                    batch_result = classify_batch(batch_texts, instruction)
+                    if batch_result:
+                        for fid, info in batch_result.items():
+                            path = path_map.get(fid)
+                            if path:
+                                group_name = info.get("group", "Невідомі")
+                                confidence = int(float(info.get("confidence", 0.7)) * 100)
+                                confidence = max(40, min(confidence, 95))
+                                groups.setdefault(group_name, []).append(
+                                    (path, confidence, "gemini")
+                                )
+                                classified_fids.add(fid)
+                    else:
+                        for fid in batch_fids:
+                            if fid in classified_fids:
+                                continue
+                            path = path_map.get(fid)
+                            if not path:
+                                continue
+                            text = texts_for_gemini[fid]
+                            result = classify_by_regex(text)
+                            if result is None:
+                                result = classify_by_keyword(text)
+                            if result is None:
+                                result = classify_by_gemini(text)
+                            if result:
+                                cat_name, method, conf = result
+                                groups.setdefault(cat_name, []).append((path, conf, method))
+                            else:
+                                unclassified.append(path)
+                            classified_fids.add(fid)
+
+                    done_ratio = min(batch_start + batch_size, len(fids)) / max(len(fids), 1)
+                    status.progress = 50 + int(done_ratio * 20)
+
+                for fid in fids:
+                    if fid not in classified_fids:
+                        path = path_map.get(fid)
+                        if path:
+                            unclassified.append(path)
             else:
-                unclassified.append(path)
+                # ── No instruction: waterfall classification ──
+                for path, text in ocr_results.items():
+                    if not text.strip():
+                        unclassified.append(path)
+                        continue
 
-        if unclassified:
-            groups["Невідомі документи"] = [
-                (p, 0, "none") for p in unclassified
-            ]
+                    result = classify_by_regex(text)
+                    if result is None:
+                        result = classify_by_keyword(text)
+                    if result is None:
+                        result = classify_by_gemini(text)
 
-        status.progress = 70
+                    if result:
+                        cat_name, method, confidence = result
+                        groups.setdefault(cat_name, []).append((path, confidence, method))
+                    else:
+                        unclassified.append(path)
+
+            if unclassified:
+                groups["Невідомі документи"] = [
+                    (p, 0, "none") for p in unclassified
+                ]
+
+            status.progress = 70
 
         # ── Step 4: Build PDFs ──
         status.step = StepEnum.BUILDING_PDF

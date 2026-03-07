@@ -61,6 +61,110 @@ def classify_text(text: str) -> dict | None:
     return None
 
 
+def classify_batch(
+    texts: dict[str, str],
+    instruction: str,
+) -> dict[str, dict] | None:
+    """Classify multiple documents using Gemini with user instruction.
+
+    Args:
+        texts: dict mapping file_id to OCR text.
+        instruction: User instruction for how to group documents.
+
+    Returns:
+        Dict mapping file_id to classification result, or None on failure.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        logger.warning("gemini_no_api_key_batch")
+        return None
+
+    # Build document summaries
+    doc_list = []
+    file_ids = list(texts.keys())
+    for i, fid in enumerate(file_ids):
+        snippet = texts[fid][:300].replace("\n", " ").strip()
+        doc_list.append(f"[{i}] {snippet}")
+
+    docs_text = "\n".join(doc_list)
+
+    prompt = (
+        f"Інструкція користувача: {instruction}\n\n"
+        f"Є {len(file_ids)} документів. Ось фрагменти кожного:\n"
+        f"{docs_text}\n\n"
+        "Класифікуй КОЖЕН документ у відповідну групу згідно інструкції користувача.\n"
+        "Кількість груп визначи згідно інструкції.\n"
+        "Відповідь строго у JSON масиві:\n"
+        '[{"index": 0, "group": "Назва групи", "confidence": 0.9}, ...]\n'
+        "Масив має містити рівно " + str(len(file_ids)) + " елементів — по одному на кожен документ."
+    )
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            result = _call_gemini_batch(api_key, prompt)
+            if result is not None:
+                output: dict[str, dict] = {}
+                for item in result:
+                    idx = item.get("index", -1)
+                    if 0 <= idx < len(file_ids):
+                        output[file_ids[idx]] = {
+                            "group": item.get("group", "Невідомі"),
+                            "confidence": item.get("confidence", 0.7),
+                        }
+                return output
+        except Exception:
+            logger.warning("gemini_batch_retry", attempt=attempt + 1, exc_info=True)
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAYS[attempt])
+
+    return None
+
+
+def _call_gemini_batch(api_key: str, prompt: str) -> list[dict] | None:
+    """Call Gemini API for batch classification."""
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.0-flash:generateContent?key={api_key}"
+    )
+
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 4096,
+        },
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+        data = json.loads(resp.read())
+
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError):
+        logger.warning("gemini_batch_bad_response", data=data)
+        return None
+
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1])
+
+    try:
+        result = json.loads(text)
+        if isinstance(result, list):
+            return result
+    except json.JSONDecodeError:
+        logger.warning("gemini_batch_json_error", text=text[:200])
+
+    return None
+
+
 def _call_gemini(api_key: str, prompt: str) -> dict | None:
     """Call Gemini API and parse JSON response."""
     url = (

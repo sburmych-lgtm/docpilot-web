@@ -20,8 +20,10 @@ ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", 
 BG = "#111111"
 BG2 = "#1a1a1a"
 BG3 = "#222222"
+BG4 = "#2e2e2e"
 FG = "#e5e5e5"
 FG2 = "#888888"
+FG3 = "#555555"
 ACCENT = "#22c55e"
 ACCENT2 = "#3b82f6"
 RED = "#ef4444"
@@ -32,12 +34,13 @@ class DocPilotApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("DocPilot — Сортувальник документів")
-        self.root.geometry("750x600")
+        self.root.geometry("750x650")
         self.root.configure(bg=BG)
         self.root.resizable(True, True)
 
         self.files: list[Path] = []
         self.processing = False
+        self.current_mode = "simple"  # "simple" or "ai"
 
         self._build_ui()
 
@@ -97,6 +100,75 @@ class DocPilotApp:
         )
         self.lbl_count.pack(pady=(4, 4))
 
+        # ── Mode selection ──
+        mode_frame = tk.Frame(self.root, bg=BG, pady=4)
+        mode_frame.pack(fill="x", padx=20)
+
+        tk.Label(
+            mode_frame, text="Режим:", font=("Segoe UI", 10),
+            bg=BG, fg=FG2,
+        ).pack(side="left", padx=(0, 8))
+
+        self.mode_var = tk.StringVar(value="simple")
+
+        self.rb_simple = tk.Radiobutton(
+            mode_frame, text="⏱  Простий (за датами)",
+            variable=self.mode_var, value="simple",
+            font=("Segoe UI", 10), bg=BG, fg=ACCENT,
+            activebackground=BG, activeforeground=ACCENT,
+            selectcolor=BG3, indicatoron=True,
+            command=self._on_mode_change,
+        )
+        self.rb_simple.pack(side="left", padx=(0, 12))
+
+        self.rb_ai = tk.Radiobutton(
+            mode_frame, text="🤖  AI (OCR + класифікація)",
+            variable=self.mode_var, value="ai",
+            font=("Segoe UI", 10), bg=BG, fg=ACCENT2,
+            activebackground=BG, activeforeground=ACCENT2,
+            selectcolor=BG3, indicatoron=True,
+            command=self._on_mode_change,
+        )
+        self.rb_ai.pack(side="left")
+
+        # ── Mode hint ──
+        self.lbl_mode_hint = tk.Label(
+            self.root,
+            text="Групування за датами та метаданими — без AI, за секунди",
+            font=("Segoe UI", 9), bg=BG, fg=FG3,
+        )
+        self.lbl_mode_hint.pack(pady=(0, 4))
+
+        # ── Instruction input (AI mode only) ──
+        self.instr_frame = tk.Frame(self.root, bg=BG)
+        # Hidden by default (simple mode)
+
+        tk.Label(
+            self.instr_frame, text="Інструкція для AI:",
+            font=("Segoe UI", 9), bg=BG, fg=FG2,
+        ).pack(anchor="w", padx=2)
+
+        self.instr_text = tk.Text(
+            self.instr_frame, height=3, bg=BG2, fg=FG,
+            font=("Segoe UI", 10), relief="solid", borderwidth=1,
+            insertbackground=FG, wrap="word",
+            highlightbackground=BORDER, highlightthickness=1,
+        )
+        self.instr_text.pack(fill="x", pady=(2, 0))
+        self.instr_text.insert("1.0", "")
+
+        # Placeholder
+        self.instr_text.insert("1.0", "Наприклад: Розділи документи на справи по Петренку. Має бути 3 справи.")
+        self.instr_text.config(fg=FG3)
+        self.instr_text.bind("<FocusIn>", self._instr_focus_in)
+        self.instr_text.bind("<FocusOut>", self._instr_focus_out)
+
+        tk.Label(
+            self.instr_frame,
+            text="AI читає вміст кожного файлу (OCR) і групує за інструкцією",
+            font=("Segoe UI", 8), bg=BG, fg=FG3,
+        ).pack(anchor="w", padx=2, pady=(2, 0))
+
         # ── Progress ──
         style = ttk.Style()
         style.theme_use("default")
@@ -109,7 +181,7 @@ class DocPilotApp:
             self.root, orient="horizontal", mode="determinate",
             style="green.Horizontal.TProgressbar",
         )
-        self.progress.pack(fill="x", padx=20, pady=(0, 4))
+        self.progress.pack(fill="x", padx=20, pady=(8, 4))
 
         self.lbl_status = tk.Label(
             self.root, text="", font=("Segoe UI", 10), bg=BG, fg=FG2,
@@ -147,6 +219,36 @@ class DocPilotApp:
         self.results_text.tag_configure("info", foreground=FG)
         self.results_text.tag_configure("error", foreground=RED)
 
+    # ── Instruction placeholder logic ──
+
+    def _instr_focus_in(self, _event):
+        if self.instr_text.get("1.0", "end").strip().startswith("Наприклад:"):
+            self.instr_text.delete("1.0", "end")
+            self.instr_text.config(fg=FG)
+
+    def _instr_focus_out(self, _event):
+        if not self.instr_text.get("1.0", "end").strip():
+            self.instr_text.insert("1.0", "Наприклад: Розділи документи на справи по Петренку. Має бути 3 справи.")
+            self.instr_text.config(fg=FG3)
+
+    # ── Mode switching ──
+
+    def _on_mode_change(self):
+        self.current_mode = self.mode_var.get()
+        if self.current_mode == "simple":
+            self.instr_frame.pack_forget()
+            self.lbl_mode_hint.config(
+                text="Групування за датами та метаданими — без AI, за секунди"
+            )
+        else:
+            self.instr_frame.pack(fill="x", padx=20, pady=(0, 4),
+                                  after=self.lbl_mode_hint)
+            self.lbl_mode_hint.config(
+                text="AI читає вміст (OCR) і класифікує за інструкцією"
+            )
+
+    # ── File selection ──
+
     def _pick_files(self):
         paths = filedialog.askopenfilenames(
             title="Обери документи",
@@ -174,6 +276,8 @@ class DocPilotApp:
         self.lbl_count.config(text=f"Файлів обрано: {n}")
         self.btn_start.config(state="normal" if n >= 2 else "disabled")
 
+    # ── Logging ──
+
     def _log(self, text: str, tag: str = "info"):
         self.results_text.config(state="normal")
         self.results_text.insert("end", text + "\n", tag)
@@ -185,6 +289,17 @@ class DocPilotApp:
         self.results_text.delete("1.0", "end")
         self.results_text.config(state="disabled")
 
+    # ── Processing ──
+
+    def _get_instruction(self) -> str:
+        """Get instruction text (only for AI mode)."""
+        if self.current_mode != "ai":
+            return ""
+        text = self.instr_text.get("1.0", "end").strip()
+        if text.startswith("Наприклад:"):
+            return ""
+        return text
+
     def _start_processing(self):
         if self.processing or len(self.files) < 2:
             return
@@ -193,6 +308,8 @@ class DocPilotApp:
         self.btn_start.config(state="disabled", text="⏳  Обробка...")
         self.btn_files.config(state="disabled")
         self.btn_folder.config(state="disabled")
+        self.rb_simple.config(state="disabled")
+        self.rb_ai.config(state="disabled")
         self._clear_log()
         self.progress["value"] = 0
 
@@ -207,69 +324,173 @@ class DocPilotApp:
         import tempfile
 
         start_time = time.time()
+        mode = self.current_mode
+        instruction = self._get_instruction()
 
         try:
             total = len(self.files)
-            self._update_ui(lambda: self.lbl_status.config(text="Читаємо текст документів..."))
-            self._update_ui(lambda: self._log(f"Обробка {total} файлів...", "header"))
+            mode_label = "Простий" if mode == "simple" else "AI"
+            self._update_ui(lambda: self._log(f"Обробка {total} файлів  [{mode_label}]", "header"))
 
-            # ── Step 1: Extract text ──
-            from app.processor import extract_text
-            ocr_results: dict[Path, str] = {}
+            if mode == "simple":
+                # ═══════════════════════════════════════
+                # SIMPLE MODE: metadata → dedup → sessions → PDF
+                # ═══════════════════════════════════════
+                self._update_ui(lambda: self.lbl_status.config(text="Читаємо метадані файлів..."))
+                self._update_ui(lambda: self.progress.configure(value=10))
 
-            for i, path in enumerate(self.files):
-                text = extract_text(path)
-                ocr_results[path] = text
-                pct = int((i + 1) / total * 40)
-                name = path.name
-                self._update_ui(lambda p=pct: self.progress.configure(value=p))
-                self._update_ui(lambda n=name: self.lbl_status.config(text=f"OCR: {n}"))
+                # Dedup
+                self._update_ui(lambda: self.lbl_status.config(text="Шукаємо дублікати..."))
+                self._update_ui(lambda: self.progress.configure(value=30))
 
-            # ── Step 2: Dedup ──
-            self._update_ui(lambda: self.lbl_status.config(text="Шукаємо дублікати..."))
-            self._update_ui(lambda: self.progress.configure(value=45))
+                from app.dedup import find_duplicates
+                unique_paths, dup_paths = find_duplicates(self.files)
+                active_paths = [p for p in self.files if p not in set(dup_paths)]
 
-            from app.dedup import find_duplicates
-            unique_paths, dup_paths = find_duplicates(self.files)
-            for dp in dup_paths:
-                ocr_results.pop(dp, None)
+                if dup_paths:
+                    self._update_ui(lambda: self._log(f"Видалено дублікатів: {len(dup_paths)}", "info"))
 
-            if dup_paths:
-                self._update_ui(lambda: self._log(f"Видалено дублікатів: {len(dup_paths)}", "info"))
+                self._update_ui(lambda: self.progress.configure(value=45))
 
-            self._update_ui(lambda: self.progress.configure(value=50))
+                # Classify by metadata
+                self._update_ui(lambda: self.lbl_status.config(text="Групуємо за датами..."))
 
-            # ── Step 3: Classify ──
-            self._update_ui(lambda: self.lbl_status.config(text="Класифікуємо документи..."))
+                from app.processor import classify_by_metadata
+                groups = classify_by_metadata(active_paths)
+                unclassified: list[Path] = []
 
-            from app.processor import classify_by_gemini, classify_by_keyword, classify_by_regex
+                self._update_ui(lambda: self.progress.configure(value=70))
 
-            groups: dict[str, list[tuple[Path, int, str]]] = {}
-            unclassified: list[Path] = []
+            else:
+                # ═══════════════════════════════════════
+                # AI MODE: OCR → dedup → classify → PDF
+                # ═══════════════════════════════════════
+                self._update_ui(lambda: self.lbl_status.config(text="Читаємо текст документів..."))
 
-            for path, text in ocr_results.items():
-                if not text.strip():
-                    unclassified.append(path)
-                    continue
+                from app.processor import extract_text
+                ocr_results: dict[Path, str] = {}
 
-                result = classify_by_regex(text)
-                if result is None:
-                    result = classify_by_keyword(text)
-                if result is None:
-                    result = classify_by_gemini(text)
+                for i, path in enumerate(self.files):
+                    text = extract_text(path)
+                    ocr_results[path] = text
+                    pct = int((i + 1) / total * 40)
+                    name = path.name
+                    self._update_ui(lambda p=pct: self.progress.configure(value=p))
+                    self._update_ui(lambda n=name: self.lbl_status.config(text=f"OCR: {n}"))
 
-                if result:
-                    cat_name, method, confidence = result
-                    groups.setdefault(cat_name, []).append((path, confidence, method))
+                # Dedup
+                self._update_ui(lambda: self.lbl_status.config(text="Шукаємо дублікати..."))
+                self._update_ui(lambda: self.progress.configure(value=45))
+
+                from app.dedup import find_duplicates
+                unique_paths, dup_paths = find_duplicates(self.files)
+                for dp in dup_paths:
+                    ocr_results.pop(dp, None)
+
+                if dup_paths:
+                    self._update_ui(lambda: self._log(f"Видалено дублікатів: {len(dup_paths)}", "info"))
+
+                self._update_ui(lambda: self.progress.configure(value=50))
+
+                # Classify
+                self._update_ui(lambda: self.lbl_status.config(text="Класифікуємо документи..."))
+
+                groups: dict[str, list[tuple[Path, int, str]]] = {}
+                unclassified: list[Path] = []
+
+                if instruction:
+                    # Instruction-based: Gemini batch
+                    self._update_ui(lambda: self.lbl_status.config(text="AI класифікує за інструкцією..."))
+
+                    from app.gemini import classify_batch
+                    from app.processor import classify_by_gemini, classify_by_keyword, classify_by_regex
+
+                    texts_for_gemini: dict[str, str] = {}
+                    path_map: dict[str, Path] = {}
+
+                    for path, text in ocr_results.items():
+                        if text.strip():
+                            texts_for_gemini[path.name] = text
+                            path_map[path.name] = path
+                        else:
+                            unclassified.append(path)
+
+                    batch_size = 15
+                    fids = list(texts_for_gemini.keys())
+                    classified_fids: set[str] = set()
+
+                    for batch_start in range(0, len(fids), batch_size):
+                        batch_fids = fids[batch_start:batch_start + batch_size]
+                        batch_texts = {fid: texts_for_gemini[fid] for fid in batch_fids}
+
+                        batch_result = classify_batch(batch_texts, instruction)
+                        if batch_result:
+                            for fid, info in batch_result.items():
+                                path = path_map.get(fid)
+                                if path:
+                                    group_name = info.get("group", "Невідомі")
+                                    confidence = int(float(info.get("confidence", 0.7)) * 100)
+                                    confidence = max(40, min(confidence, 95))
+                                    groups.setdefault(group_name, []).append(
+                                        (path, confidence, "gemini")
+                                    )
+                                    classified_fids.add(fid)
+                        else:
+                            for fid in batch_fids:
+                                if fid in classified_fids:
+                                    continue
+                                path = path_map.get(fid)
+                                if not path:
+                                    continue
+                                text = texts_for_gemini[fid]
+                                result = classify_by_regex(text)
+                                if result is None:
+                                    result = classify_by_keyword(text)
+                                if result is None:
+                                    result = classify_by_gemini(text)
+                                if result:
+                                    cat_name, method, conf = result
+                                    groups.setdefault(cat_name, []).append((path, conf, method))
+                                else:
+                                    unclassified.append(path)
+                                classified_fids.add(fid)
+
+                        done_ratio = min(batch_start + batch_size, len(fids)) / max(len(fids), 1)
+                        pct = 50 + int(done_ratio * 20)
+                        self._update_ui(lambda p=pct: self.progress.configure(value=p))
+
+                    for fid in fids:
+                        if fid not in classified_fids:
+                            path = path_map.get(fid)
+                            if path:
+                                unclassified.append(path)
                 else:
-                    unclassified.append(path)
+                    # No instruction: waterfall
+                    from app.processor import classify_by_gemini, classify_by_keyword, classify_by_regex
 
-            if unclassified:
-                groups["Невідомі документи"] = [(p, 0, "none") for p in unclassified]
+                    for path, text in ocr_results.items():
+                        if not text.strip():
+                            unclassified.append(path)
+                            continue
+
+                        result = classify_by_regex(text)
+                        if result is None:
+                            result = classify_by_keyword(text)
+                        if result is None:
+                            result = classify_by_gemini(text)
+
+                        if result:
+                            cat_name, method, confidence = result
+                            groups.setdefault(cat_name, []).append((path, confidence, method))
+                        else:
+                            unclassified.append(path)
+
+                if unclassified:
+                    groups["Невідомі документи"] = [(p, 0, "none") for p in unclassified]
 
             self._update_ui(lambda: self.progress.configure(value=70))
 
-            # ── Step 4: Build PDFs ──
+            # ── Build PDFs (both modes) ──
             self._update_ui(lambda: self.lbl_status.config(text="Створюємо PDF файли..."))
 
             from app.pdf_builder import build_pdf, safe_filename
@@ -321,6 +542,8 @@ class DocPilotApp:
             self._update_ui(lambda: self.btn_start.config(state="normal", text="▶  Почати сортування"))
             self._update_ui(lambda: self.btn_files.config(state="normal"))
             self._update_ui(lambda: self.btn_folder.config(state="normal"))
+            self._update_ui(lambda: self.rb_simple.config(state="normal"))
+            self._update_ui(lambda: self.rb_ai.config(state="normal"))
             self.processing = False
 
     def _ask_save(self, output_dir: Path):

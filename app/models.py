@@ -16,6 +16,7 @@ class FileStatusEnum(StrEnum):
 
 class StepEnum(StrEnum):
     UPLOADING = "uploading"
+    METADATA = "metadata"
     OCR = "ocr"
     DEDUP = "dedup"
     CLASSIFYING = "classifying"

@@ -15,6 +15,8 @@ from fastapi import BackgroundTasks, FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from pydantic import BaseModel
+
 from app.models import (
     FileStatus,
     StepEnum,
@@ -33,12 +35,25 @@ ALLOWED_EXTENSIONS = {
 }
 TASK_TTL_SECONDS = 30 * 60  # 30 minutes
 
+
+class TaskCreateRequest(BaseModel):
+    instruction: str = ""
+    mode: str = "simple"
+
+
+class TaskStartRequest(BaseModel):
+    instruction: str = ""
+    mode: str = "simple"
+
+
 # ── In-memory storage ──
 tasks: dict[str, TaskStatus] = {}
 task_results: dict[str, TaskResult] = {}
 task_output_dirs: dict[str, Path] = {}
 task_upload_dirs: dict[str, Path] = {}
 task_created: dict[str, float] = {}
+task_instructions: dict[str, str] = {}
+task_modes: dict[str, str] = {}
 
 # ── App ──
 app = FastAPI(title="DocPilot", version="1.0.0")
@@ -76,6 +91,8 @@ async def _cleanup_loop():
             tasks.pop(tid, None)
             task_results.pop(tid, None)
             task_created.pop(tid, None)
+            task_instructions.pop(tid, None)
+            task_modes.pop(tid, None)
 
             upload_dir = task_upload_dirs.pop(tid, None)
             if upload_dir and upload_dir.exists():
@@ -107,7 +124,7 @@ async def upload(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
 ):
-    """Upload files and start processing."""
+    """Upload files and start processing (single request, for small batches)."""
     if len(files) < 2:
         return JSONResponse(
             status_code=400,
@@ -162,16 +179,131 @@ async def upload(
     task_created[task_id] = time.time()
     task_upload_dirs[task_id] = upload_dir
 
-    background_tasks.add_task(_run_pipeline_wrapper, task_id, saved_paths)
+    background_tasks.add_task(_run_pipeline_wrapper, task_id, saved_paths, "")
 
     return UploadResponse(task_id=task_id, file_count=len(saved_paths))
 
 
-def _run_pipeline_wrapper(task_id: str, file_paths: list[Path]) -> None:
+# ── Batch upload endpoints (for large file counts) ──
+
+
+@app.post("/api/task/create")
+async def create_task(body: TaskCreateRequest | None = None):
+    """Create a task for batch uploading."""
+    task_id = str(uuid.uuid4())
+    upload_dir = Path(tempfile.mkdtemp(prefix=f"docpilot_upload_{task_id[:8]}_"))
+
+    tasks[task_id] = TaskStatus(
+        task_id=task_id,
+        step=StepEnum.UPLOADING,
+        progress=0,
+        files=[],
+        message="Завантажуємо файли...",
+    )
+    task_created[task_id] = time.time()
+    task_upload_dirs[task_id] = upload_dir
+    if body and body.instruction:
+        task_instructions[task_id] = body.instruction
+    if body and body.mode:
+        task_modes[task_id] = body.mode
+
+    return {"task_id": task_id}
+
+
+@app.post("/api/task/{task_id}/files")
+async def upload_batch(task_id: str, files: list[UploadFile] = File(...)):
+    """Upload a batch of files to an existing task."""
+    status = tasks.get(task_id)
+    if not status:
+        return JSONResponse(status_code=404, content={"error": "Task not found"})
+
+    upload_dir = task_upload_dirs.get(task_id)
+    if not upload_dir or not upload_dir.exists():
+        return JSONResponse(status_code=404, content={"error": "Upload dir not found"})
+
+    saved_count = 0
+    for f in files:
+        ext = Path(f.filename or "unknown").suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            continue
+
+        content = await f.read()
+        size_mb = len(content) / (1024 * 1024)
+        if size_mb > MAX_FILE_SIZE_MB:
+            continue
+
+        safe_name = f.filename or f"file_{len(status.files)}{ext}"
+        # Avoid name collisions
+        file_path = upload_dir / safe_name
+        counter = 1
+        while file_path.exists():
+            stem = Path(safe_name).stem
+            file_path = upload_dir / f"{stem}_{counter}{ext}"
+            counter += 1
+        file_path.write_bytes(content)
+
+        status.files.append(
+            FileStatus(
+                name=file_path.name,
+                ext=ext.lstrip(".").upper(),
+                size=_format_size(len(content)),
+            )
+        )
+        saved_count += 1
+
+    return {"saved": saved_count, "total": len(status.files)}
+
+
+@app.post("/api/task/{task_id}/start")
+async def start_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    body: TaskStartRequest | None = None,
+):
+    """Start processing after all batches are uploaded."""
+    status = tasks.get(task_id)
+    if not status:
+        return JSONResponse(status_code=404, content={"error": "Task not found"})
+
+    upload_dir = task_upload_dirs.get(task_id)
+    if not upload_dir or not upload_dir.exists():
+        return JSONResponse(status_code=404, content={"error": "Upload dir not found"})
+
+    file_paths = sorted(upload_dir.iterdir())
+    if len(file_paths) < 2:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Потрібно щонайменше 2 файли"},
+        )
+
+    instruction = ""
+    if body and body.instruction:
+        instruction = body.instruction
+    elif task_id in task_instructions:
+        instruction = task_instructions[task_id]
+
+    mode = "simple"
+    if body and body.mode:
+        mode = body.mode
+    elif task_id in task_modes:
+        mode = task_modes[task_id]
+
+    status.message = "Починаємо обробку..."
+    background_tasks.add_task(_run_pipeline_wrapper, task_id, file_paths, instruction, mode)
+
+    return {"task_id": task_id, "file_count": len(file_paths)}
+
+
+def _run_pipeline_wrapper(
+    task_id: str,
+    file_paths: list[Path],
+    instruction: str = "",
+    mode: str = "simple",
+) -> None:
     """Wrapper to run pipeline (called via BackgroundTasks)."""
     from app.processor import run_pipeline
 
-    run_pipeline(task_id, tasks, file_paths, task_results, task_output_dirs)
+    run_pipeline(task_id, tasks, file_paths, task_results, task_output_dirs, instruction, mode)
 
 
 @app.get("/api/status/{task_id}")
@@ -218,4 +350,5 @@ async def download(task_id: str):
 
 
 # Serve static files (index.html) — mount LAST
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+_static_dir = Path(__file__).resolve().parent.parent / "static"
+app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
