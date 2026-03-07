@@ -125,6 +125,40 @@ async def health():
     }
 
 
+@app.get("/api/gemini-test")
+async def gemini_test():
+    """Quick Gemini API connectivity test."""
+    import json
+    import os
+    import urllib.error
+    import urllib.request
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return {"status": "error", "detail": "GEMINI_API_KEY not set"}
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.0-flash:generateContent?key={api_key}"
+    )
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": "Say OK"}]}],
+        "generationConfig": {"maxOutputTokens": 5},
+    }).encode()
+
+    try:
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            return {"status": "ok", "response": text.strip()}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:500]
+        return {"status": "error", "code": e.code, "detail": body}
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+
+
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload(
     background_tasks: BackgroundTasks,
